@@ -66,16 +66,41 @@ jobs:
 
 1. **Allowlist 機制：** 只有帶 `RF_` 前綴的環境變數會被轉換為 Robot Framework 變數。未帶前綴的環境變數（包括 GitHub secrets）不會被自動注入。
 
-2. **日誌遮蔽：** 執行日誌只會顯示變數名稱，不會顯示變數值。所有值都會以 `[REDACTED]` 取代。
+2. **Console 日誌遮蔽：** **僅 console 輸出**的變數值會以 `[REDACTED]` 取代顯示。這適用於 GitHub Actions 執行日誌。
 
-3. **報告注意事項：** Robot Framework 生成的報告（`log.html`、`report.html`、`output.xml`）可能包含測試過程中使用的變數值。**GitHub 的日誌遮蔽不適用於 artifact 檔案內容。** 請謹慎處理包含敏感資料的報告。
+3. **Artifact 清洗：** 測試完成後，報告檔案（`output.xml`、`log.html`、`report.html`）中的 `RF_*` 變數值會被替換為 `[SCRUBBED]`。
+
+4. **URL 安全：** 如果 `target_url` 包含 userinfo（如 `https://user:password@host`），密碼部分會在日誌中遮蔽為 `***`。
+
+### ⚠️ RF_* 是明文 Opt-in 機制
+
+使用 `RF_` 前綴代表您**明確選擇**將該值傳遞給 Robot Framework 作為變數。請注意：
+
+- **請勿將高度敏感的 secrets 透過 `RF_*` 傳遞**（如資料庫密碼、私鑰等）
+- 雖然 artifact 會被清洗，但處理過程中值仍會短暫存在於記憶體和磁碟
+- 若您必須使用敏感資料，請考慮使用 `variable_file` 並確保檔案不會被上傳
+
+### Artifact 處理建議
+
+**GitHub 的日誌遮蔽不適用於 artifact 檔案內容。** 即使經過清洗，報告 artifact 仍應視為敏感資料：
+
+```yaml
+- name: Upload Test Reports
+  uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: robot-framework-reports
+    path: reports/
+    retention-days: 3  # 建議設定較短的保留時間
+```
 
 ### 最佳實務
 
 - 使用 `RF_` 前綴明確標示要傳遞給測試的變數
-- 避免在測試中記錄敏感資料
-- 考慮對包含敏感資訊的報告設定較短的 retention 時間
+- **避免透過 `RF_*` 傳遞高度敏感的 secrets**
+- 將 artifact `retention-days` 設為較短時間（如 1-3 天）
 - 使用 `variable_file` 搭配 `.gitignore` 管理本地測試的敏感設定
+- 避免在測試中使用 `Log` 關鍵字記錄敏感資料
 
 ## Inputs
 
