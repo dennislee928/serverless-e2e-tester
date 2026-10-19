@@ -6,6 +6,8 @@
 
 ## 使用方式
 
+此 Action 是 **composite action**，會自動設定 Python 環境、安裝相依套件、執行測試並上傳報告 artifact。
+
 ```yaml
 name: API E2E Tests
 
@@ -26,15 +28,26 @@ jobs:
         with:
           test_dir: tests
           target_url: https://your-api.workers.dev
-
-      - name: Upload Test Reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: robot-framework-reports
-          path: reports/
-          retention-days: 3  # 建議 1-3 天，報告可能含敏感資料
+          artifact_retention_days: 3  # 建議 1-3 天，報告可能含敏感資料
 ```
+
+**注意：** Artifact 上傳功能已內建於此 Action，無需另外呼叫 `actions/upload-artifact`。若要停用自動上傳，設定 `upload_artifact: 'false'`。
+
+## 平行執行 (pabot)
+
+設定 `processes` 大於 1 時，此 Action 會自動安裝並使用 [pabot](https://pabot.org/)（robotframework-pabot）進行平行測試：
+
+```yaml
+- name: Run Tests in Parallel
+  uses: dennislee928/serverless-e2e-tester@v0.1.0
+  with:
+    test_dir: tests
+    target_url: https://your-api.workers.dev
+    processes: 4  # 使用 pabot 以 4 個 processes 平行執行
+```
+
+- `processes: 1`（預設）：使用 `robot` 循序執行
+- `processes: 2` 或更大：使用 `pabot --processes N` 平行執行
 
 ## 環境變數與 Robot Framework 變數
 
@@ -72,6 +85,8 @@ jobs:
 
 4. **URL 安全：** 如果 `target_url` 包含 userinfo（如 `https://user:password@host`），密碼部分會在日誌中遮蔽為 `***`。
 
+5. **Userinfo 密碼獨立清洗：** 從 URL 型環境變數（`TARGET_URL`、`RF_*` 中的 URL 值）解析出 userinfo 的密碼部分，作為獨立的清洗目標。即使完整 URL 未出現在 artifact 中，只有 `username:password@` 片段出現也會被清洗。這可處理 RequestsLibrary 等套件記錄截斷 URL 片段的情況。
+
 ### ⚠️ RF_* 是明文 Opt-in 機制
 
 使用 `RF_` 前綴代表您**明確選擇**將該值傳遞給 Robot Framework 作為變數。請注意：
@@ -98,16 +113,22 @@ env:
 
 ### Artifact 處理建議
 
-**GitHub 的日誌遮蔽不適用於 artifact 檔案內容。** 即使經過清洗，報告 artifact 仍應視為敏感資料：
+**GitHub 的日誌遮蔽不適用於 artifact 檔案內容。** 即使經過清洗，報告 artifact 仍應視為敏感資料。
+
+此 Action 會自動上傳報告 artifact（使用 `actions/upload-artifact@v4`），可透過以下 inputs 控制：
+
+- `artifact_name`：artifact 名稱（預設：`robot-framework-reports`）
+- `artifact_retention_days`：保留天數（預設：3 天，建議 1-3 天）
+- `upload_artifact`：是否上傳（預設：`true`，設為 `false` 可停用）
 
 ```yaml
-- name: Upload Test Reports
-  uses: actions/upload-artifact@v4
-  if: always()
+- name: Run Tests with Custom Artifact Settings
+  uses: dennislee928/serverless-e2e-tester@v0.1.0
   with:
-    name: robot-framework-reports
-    path: reports/
-    retention-days: 3  # 建議 1-3 天
+    test_dir: tests
+    target_url: https://your-api.workers.dev
+    artifact_name: my-test-reports
+    artifact_retention_days: 1  # 建議 1-3 天
 ```
 
 ### 最佳實務
@@ -129,11 +150,12 @@ env:
 | `include_tags` | 要執行的標籤，逗號分隔 | 否 | - |
 | `exclude_tags` | 要排除的標籤，逗號分隔 | 否 | - |
 | `variable_file` | Robot Framework 變數檔，多個路徑用逗號分隔 | 否 | - |
-| `processes` | 平行行程數，`1` 為循序執行 | 否 | `1` |
+| `processes` | 平行行程數：`1` 使用 `robot`（循序），`>1` 使用 `pabot`（平行） | 否 | `1` |
 | `timeout` | 測試逾時，例如 `5 minutes` | 否 | - |
 | `log_level` | `TRACE`、`DEBUG`、`INFO`、`WARN`、`ERROR`、`NONE` | 否 | `INFO` |
 | `artifact_name` | 報告 artifact 名稱 | 否 | `robot-framework-reports` |
 | `artifact_retention_days` | artifact 保留天數（建議 1-3 天） | 否 | `3` |
+| `upload_artifact` | 是否自動上傳報告 artifact | 否 | `true` |
 
 ## Outputs
 
