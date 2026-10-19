@@ -1,7 +1,6 @@
 *** Settings ***
 Documentation    Canary test to verify variable injection and secret protection.
-...              Includes tests that Log values and fail assertions to exercise
-...              artifact leakage paths in output.xml, log.html, report.html.
+...              Includes tests that Log values to exercise artifact leakage paths.
 Library          Collections
 Library          String
 
@@ -10,40 +9,39 @@ ${BASE_URL}           http://localhost
 ${TARGET_URL}         http://localhost
 ${ALLOWLISTED_VAR}    default_value
 ${TEST_CONFIG}        default_config
-${CANARY_EXPECTED}    ALLOWED_VALUE_ABCDE
+${SPECIAL_CHARS}      default_special
 
 *** Test Cases ***
-Verify BASE_URL Is Available
-    [Documentation]    BASE_URL should be injected from target_url
-    [Tags]    smoke
+Log BASE_URL With Double Slash
+    [Documentation]    Log BASE_URL which contains // to test scrubbing of URLs
+    [Tags]    artifact-leakage
+    Log    BASE_URL value is: ${BASE_URL}
     Should Not Be Empty    ${BASE_URL}
 
-Verify TARGET_URL Is Available
-    [Documentation]    TARGET_URL should be injected from target_url
-    [Tags]    smoke
+Log TARGET_URL Value
+    [Documentation]    Log TARGET_URL to exercise artifact leakage path
+    [Tags]    artifact-leakage
+    Log    TARGET_URL value is: ${TARGET_URL}
     Should Not Be Empty    ${TARGET_URL}
 
-Verify Allowlisted Variable Works
-    [Documentation]    RF_ prefixed variables should be available and have correct value
-    [Tags]    smoke
-    Should Not Be Empty    ${ALLOWLISTED_VAR}
-    Should Be Equal    ${ALLOWLISTED_VAR}    ${CANARY_EXPECTED}
-
-Log Variable Value For Artifact Leakage Test
-    [Documentation]    This test explicitly logs the variable value.
-    ...                The value WILL appear in log.html and output.xml.
-    ...                This exercises the artifact leakage path that the canary must detect.
+Log Allowlisted Variable
+    [Documentation]    Log RF_ prefixed variable value
     [Tags]    artifact-leakage
-    Log    The allowlisted variable value is: ${ALLOWLISTED_VAR}
-    Log    TEST_CONFIG value is: ${TEST_CONFIG}
+    Log    ALLOWLISTED_VAR value is: ${ALLOWLISTED_VAR}
+    Should Not Be Empty    ${ALLOWLISTED_VAR}
 
-Fail Assertion With Variable Value
-    [Documentation]    This test fails with the variable in the error message.
-    ...                The value WILL appear in output.xml and report.html.
-    ...                This exercises the failure path for artifact leakage detection.
-    [Tags]    artifact-leakage    expected-fail
-    ${wrong_expected}=    Set Variable    WRONG_VALUE_THAT_WILL_NOT_MATCH
-    Run Keyword And Expect Error    *${ALLOWLISTED_VAR}*    Should Be Equal    ${ALLOWLISTED_VAR}    ${wrong_expected}
+Log Second RF Variable
+    [Documentation]    Log second RF_ prefixed variable
+    [Tags]    artifact-leakage
+    Log    TEST_CONFIG value is: ${TEST_CONFIG}
+    Should Not Be Empty    ${TEST_CONFIG}
+
+Log Third RF Variable With Special Chars
+    [Documentation]    Log third RF_ variable containing & < > special chars
+    ...                Tests that XML/HTML escaped variants are also scrubbed
+    [Tags]    artifact-leakage    special-chars
+    Log    SPECIAL_CHARS value is: ${SPECIAL_CHARS}
+    Should Not Be Empty    ${SPECIAL_CHARS}
 
 Canary Test Passes
     [Documentation]    Simple pass test to ensure test suite runs

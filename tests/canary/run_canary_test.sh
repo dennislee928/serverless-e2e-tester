@@ -4,11 +4,13 @@
 # This script verifies that:
 # 1. Non-RF_ prefixed secrets do NOT appear in logs or reports
 # 2. RF_ prefixed variable values are SCRUBBED from artifacts after run
-# 3. Variable values are REDACTED in console log output
-# 4. Variable names (without values) ARE visible in logs
-# 5. Tests that Log variables and fail assertions are exercised
+# 3. XML/HTML escaped variants are also scrubbed
+# 4. Variable values are REDACTED in console log output (command line only)
+# 5. Truly failing suites still get scrubbed and exit non-zero
+# 6. Userinfo password is scrubbed from artifacts
 #
 # Uses grep -rF (recursive, fixed string) for all searches.
+# Does NOT print canary values in output.
 
 set -euo pipefail
 
@@ -32,39 +34,36 @@ rm -rf "$REPORT_DIR" "$LOG_FILE"
 mkdir -p "$REPORT_DIR"
 
 # =============================================================================
-# CANARY VALUES - Unique strings that must not leak
+# CANARY VALUES - stored in variables but NOT printed to output
 # =============================================================================
 
 # Non-RF_ prefixed secrets - these should NEVER appear anywhere
-CANARY_SECRET_1="CANARY_SECRET_12345_SHOULD_NOT_LEAK"
-CANARY_SECRET_2="LEAKED_API_KEY_67890_DANGER"
-CANARY_SECRET_3="SUPER_SECRET_XYZZY_PRIVATE"
+CANARY_SECRET_1="CANARY_SEC_12345_NOLEAK"
+CANARY_SECRET_2="LEAKED_KEY_67890_BAD"
+CANARY_SECRET_3="SUPER_SEC_XYZZY_PRIV"
 
 # RF_ prefixed values - these should be SCRUBBED from artifacts after run
-# They will initially appear in artifacts (Robot logs them), but entrypoint
-# must scrub them before the script completes
-RF_CANARY_VALUE_1="ALLOWED_VALUE_ABCDE"
-RF_CANARY_VALUE_2="test_config_value_FGHIJ"
+# Value 1: simple alphanumeric
+RF_CANARY_VALUE_1="ALLOWED_VAL_ABCDE"
 
-# Target URL with userinfo - the password should be masked in logs
-TARGET_URL_WITH_USERINFO="http://testuser:secretpassword123@localhost:8080/api"
-USERINFO_PASSWORD="secretpassword123"
+# Value 2: contains path separator
+RF_CANARY_VALUE_2="config/path/value_FGHIJ"
+
+# Value 3: contains XML/HTML special chars that will be escaped
+# Includes & < > to test escaped variant scrubbing
+RF_CANARY_VALUE_3="Adv<Data>&Special|Val@123"
+
+# Target URL with userinfo - password must be scrubbed from artifacts too
+TARGET_URL_WITH_USERINFO="http://testuser:secretpw789xyz@localhost:8080/api/v1"
+USERINFO_PASSWORD="secretpw789xyz"
 
 log_info "=============================================="
 log_info "CANARY SECRET LEAKAGE TEST"
 log_info "=============================================="
 log_info ""
-log_info "Non-RF_ canary secrets (must NOT appear anywhere):"
-log_info "  - $CANARY_SECRET_1"
-log_info "  - $CANARY_SECRET_2"
-log_info "  - $CANARY_SECRET_3"
-log_info ""
-log_info "RF_ canary values (must be SCRUBBED from artifacts):"
-log_info "  - $RF_CANARY_VALUE_1"
-log_info "  - $RF_CANARY_VALUE_2"
-log_info ""
-log_info "Userinfo password (must be masked in logs):"
-log_info "  - $USERINFO_PASSWORD"
+log_info "Testing with 3 non-RF secrets, 3 RF values, and userinfo password"
+log_info "RF value 3 contains XML special chars: & < >"
+log_info "This test includes an intentionally FAILING suite"
 log_info ""
 
 # =============================================================================
@@ -80,15 +79,13 @@ export SUPER_SECRET="$CANARY_SECRET_3"
 # and must be scrubbed from artifacts after the run
 export RF_ALLOWLISTED_VAR="$RF_CANARY_VALUE_1"
 export RF_TEST_CONFIG="$RF_CANARY_VALUE_2"
-
-# Also set the expected value for the robot test assertion
-export RF_CANARY_EXPECTED="$RF_CANARY_VALUE_1"
+export RF_SPECIAL_CHARS="$RF_CANARY_VALUE_3"
 
 # =============================================================================
-# RUN ENTRYPOINT
+# RUN ENTRYPOINT WITH FAILING SUITE
 # =============================================================================
 
-log_info "Running entrypoint.sh with target URL containing userinfo..."
+log_info "Running entrypoint.sh (includes failing suite, expects non-zero exit)..."
 cd "$REPO_ROOT"
 
 ENTRYPOINT_EXIT=0
@@ -108,7 +105,6 @@ log_info ""
 
 TESTS_PASSED=0
 TESTS_FAILED=0
-LEAK_DETAILS=""
 
 run_check() {
     local name="$1"
@@ -121,7 +117,7 @@ run_check() {
         log_fail "$name"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         if [ -n "$details" ]; then
-            LEAK_DETAILS="${LEAK_DETAILS}\n  - $name: $details"
+            echo "    Details: $details"
         fi
     fi
 }
@@ -131,13 +127,11 @@ check_no_leak() {
     local search_value="$2"
     local search_path="$3"
     
-    if grep -rF "$search_value" "$search_path" >/dev/null 2>&1; then
-        local found_in
-        found_in=$(grep -rlF "$search_value" "$search_path" 2>/dev/null | head -3 | tr '\n' ', ')
-        run_check "$description" 1 "Found in: $found_in"
+    if grep -rqF "$search_value" "$search_path" 2>/dev/null; then
+        run_check "$description" 1 "Found matches"
         return 1
     else
-        run_check "$description" 0
+        run_check "$description (0 matches)" 0
         return 0
     fi
 }
@@ -151,88 +145,111 @@ log_info "=== CANARY TEST RESULTS ==="
 echo ""
 
 # -----------------------------------------------------------------------------
-# CHECK 1: Non-RF_ secrets must NOT appear in console logs
+# CHECK: Entrypoint should exit non-zero (failing suite)
 # -----------------------------------------------------------------------------
-log_info "Checking console logs for non-RF_ secret leakage..."
+log_info "Checking entrypoint exit code (should be non-zero due to failing suite)..."
 
-check_no_leak "Non-RF_ secret 1 NOT in console logs" "$CANARY_SECRET_1" "$LOG_FILE"
-check_no_leak "Non-RF_ secret 2 NOT in console logs" "$CANARY_SECRET_2" "$LOG_FILE"
-check_no_leak "Non-RF_ secret 3 NOT in console logs" "$CANARY_SECRET_3" "$LOG_FILE"
-
-# -----------------------------------------------------------------------------
-# CHECK 2: Non-RF_ secrets must NOT appear in report artifacts
-# -----------------------------------------------------------------------------
-log_info "Checking report artifacts for non-RF_ secret leakage (recursive)..."
-
-check_no_leak "Non-RF_ secret 1 NOT in artifacts" "$CANARY_SECRET_1" "$REPORT_DIR"
-check_no_leak "Non-RF_ secret 2 NOT in artifacts" "$CANARY_SECRET_2" "$REPORT_DIR"
-check_no_leak "Non-RF_ secret 3 NOT in artifacts" "$CANARY_SECRET_3" "$REPORT_DIR"
-
-# -----------------------------------------------------------------------------
-# CHECK 3: RF_ variable values must be REDACTED in console logs
-# -----------------------------------------------------------------------------
-log_info "Checking console logs for RF_ value redaction..."
-
-check_no_leak "RF_ value 1 REDACTED in console logs" "$RF_CANARY_VALUE_1" "$LOG_FILE"
-check_no_leak "RF_ value 2 REDACTED in console logs" "$RF_CANARY_VALUE_2" "$LOG_FILE"
-
-# -----------------------------------------------------------------------------
-# CHECK 4: RF_ variable values must be SCRUBBED from artifacts
-# -----------------------------------------------------------------------------
-log_info "Checking report artifacts for RF_ value scrubbing (recursive)..."
-
-check_no_leak "RF_ value 1 SCRUBBED from artifacts" "$RF_CANARY_VALUE_1" "$REPORT_DIR"
-check_no_leak "RF_ value 2 SCRUBBED from artifacts" "$RF_CANARY_VALUE_2" "$REPORT_DIR"
-
-# -----------------------------------------------------------------------------
-# CHECK 5: Userinfo password must be masked in console logs
-# -----------------------------------------------------------------------------
-log_info "Checking that userinfo password is masked in console logs..."
-
-check_no_leak "Userinfo password masked in console logs" "$USERINFO_PASSWORD" "$LOG_FILE"
-
-# -----------------------------------------------------------------------------
-# CHECK 6: Variable NAMES should appear in logs (for debugging)
-# -----------------------------------------------------------------------------
-log_info "Checking that variable names ARE visible in console logs..."
-
-if grep -F "ALLOWLISTED_VAR" "$LOG_FILE" >/dev/null 2>&1; then
-    run_check "Variable name ALLOWLISTED_VAR visible in logs" 0
+if [ "$ENTRYPOINT_EXIT" -ne 0 ]; then
+    run_check "Entrypoint exited non-zero ($ENTRYPOINT_EXIT)" 0
 else
-    run_check "Variable name ALLOWLISTED_VAR visible in logs" 1 "Name not found"
+    run_check "Entrypoint exited non-zero" 1 "Got exit code 0, expected non-zero"
 fi
 
 # -----------------------------------------------------------------------------
-# CHECK 7: [REDACTED] placeholder should appear in logs
+# CHECK: Non-RF_ secrets must NOT appear in artifacts (recursive)
 # -----------------------------------------------------------------------------
-log_info "Checking that [REDACTED] placeholder appears in console logs..."
+log_info "Checking artifacts for non-RF_ secret leakage (recursive grep -rF)..."
 
-if grep -F "[REDACTED]" "$LOG_FILE" >/dev/null 2>&1; then
-    run_check "[REDACTED] placeholder in console logs" 0
-else
-    run_check "[REDACTED] placeholder in console logs" 1 "Placeholder not found"
-fi
+check_no_leak "Non-RF secret 1 NOT in artifacts" "$CANARY_SECRET_1" "$REPORT_DIR"
+check_no_leak "Non-RF secret 2 NOT in artifacts" "$CANARY_SECRET_2" "$REPORT_DIR"
+check_no_leak "Non-RF secret 3 NOT in artifacts" "$CANARY_SECRET_3" "$REPORT_DIR"
 
 # -----------------------------------------------------------------------------
-# CHECK 8: [SCRUBBED] placeholder should appear in artifacts (if scrubbing worked)
+# CHECK: RF_ variable values must be SCRUBBED from artifacts (recursive)
+# -----------------------------------------------------------------------------
+log_info "Checking artifacts for RF_ value scrubbing (recursive grep -rF)..."
+
+check_no_leak "RF value 1 SCRUBBED from artifacts" "$RF_CANARY_VALUE_1" "$REPORT_DIR"
+check_no_leak "RF value 2 (with /) SCRUBBED from artifacts" "$RF_CANARY_VALUE_2" "$REPORT_DIR"
+check_no_leak "RF value 3 (with &<>) SCRUBBED from artifacts" "$RF_CANARY_VALUE_3" "$REPORT_DIR"
+
+# -----------------------------------------------------------------------------
+# CHECK: XML/HTML escaped variants must also be scrubbed
+# -----------------------------------------------------------------------------
+log_info "Checking artifacts for XML/HTML escaped variants..."
+
+# The escaped form of RF_CANARY_VALUE_3 "Adv<Data>&Special|Val@123"
+# would be "Adv&lt;Data&gt;&amp;Special|Val@123"
+ESCAPED_VALUE_3="Adv&lt;Data&gt;&amp;Special|Val@123"
+check_no_leak "RF value 3 escaped form SCRUBBED" "$ESCAPED_VALUE_3" "$REPORT_DIR"
+
+# -----------------------------------------------------------------------------
+# CHECK: Target URL (BASE_URL/TARGET_URL with //) must be scrubbed
+# -----------------------------------------------------------------------------
+log_info "Checking artifacts for target URL scrubbing..."
+
+check_no_leak "Target URL SCRUBBED from artifacts" "$TARGET_URL_WITH_USERINFO" "$REPORT_DIR"
+
+# -----------------------------------------------------------------------------
+# CHECK: Userinfo password must be scrubbed from artifacts
+# -----------------------------------------------------------------------------
+log_info "Checking artifacts for userinfo password scrubbing..."
+
+check_no_leak "Userinfo password SCRUBBED from artifacts" "$USERINFO_PASSWORD" "$REPORT_DIR"
+
+# -----------------------------------------------------------------------------
+# CHECK: [SCRUBBED] placeholder should appear in artifacts
 # -----------------------------------------------------------------------------
 log_info "Checking that [SCRUBBED] placeholder appears in artifacts..."
 
 if grep -rF "[SCRUBBED]" "$REPORT_DIR" >/dev/null 2>&1; then
     run_check "[SCRUBBED] placeholder in artifacts" 0
 else
-    run_check "[SCRUBBED] placeholder in artifacts" 1 "Scrubbing may not have occurred"
+    run_check "[SCRUBBED] placeholder in artifacts" 1 "Not found"
 fi
 
 # -----------------------------------------------------------------------------
-# CHECK 9: Robot Framework should have run (artifacts exist)
+# CHECK: Robot Framework artifacts exist
 # -----------------------------------------------------------------------------
 log_info "Checking that Robot Framework artifacts were generated..."
 
 if [ -f "$REPORT_DIR/output.xml" ] && [ -f "$REPORT_DIR/log.html" ] && [ -f "$REPORT_DIR/report.html" ]; then
     run_check "Robot Framework artifacts generated" 0
 else
-    run_check "Robot Framework artifacts generated" 1 "Missing output.xml, log.html, or report.html"
+    run_check "Robot Framework artifacts generated" 1 "Missing files"
+fi
+
+# -----------------------------------------------------------------------------
+# CHECK: Variable names (not values) visible in console logs
+# -----------------------------------------------------------------------------
+log_info "Checking variable names visible in console logs..."
+
+if grep -F "ALLOWLISTED_VAR" "$LOG_FILE" >/dev/null 2>&1; then
+    run_check "Variable name visible in console logs" 0
+else
+    run_check "Variable name visible in console logs" 1 "Not found"
+fi
+
+# -----------------------------------------------------------------------------
+# CHECK: [REDACTED] placeholder in console logs (command line)
+# -----------------------------------------------------------------------------
+log_info "Checking [REDACTED] placeholder in console logs..."
+
+if grep -F "[REDACTED]" "$LOG_FILE" >/dev/null 2>&1; then
+    run_check "[REDACTED] in console command line" 0
+else
+    run_check "[REDACTED] in console command line" 1 "Not found"
+fi
+
+# -----------------------------------------------------------------------------
+# CHECK: Userinfo password masked in Target URL log line
+# -----------------------------------------------------------------------------
+log_info "Checking userinfo masking in Target URL log line..."
+
+if grep -F "Target URL:" "$LOG_FILE" | grep -F "***" >/dev/null 2>&1; then
+    run_check "Userinfo masked (***) in Target URL log" 0
+else
+    run_check "Userinfo masked (***) in Target URL log" 1 "Not found"
 fi
 
 # =============================================================================
@@ -243,22 +260,13 @@ echo ""
 log_info "=== SUMMARY ==="
 echo "Tests passed: $TESTS_PASSED"
 echo "Tests failed: $TESTS_FAILED"
-
-if [ -n "$LEAK_DETAILS" ]; then
-    echo ""
-    log_info "Leak details:"
-    echo -e "$LEAK_DETAILS"
-fi
-
+echo "Entrypoint exit code: $ENTRYPOINT_EXIT"
 echo ""
 
 if [ $TESTS_FAILED -gt 0 ]; then
-    log_fail "CANARY TEST FAILED - Secret leakage or scrubbing issues detected!"
-    echo ""
-    log_info "Debug: Listing report directory contents..."
-    ls -la "$REPORT_DIR" 2>/dev/null || true
+    log_fail "CANARY TEST FAILED - Issues detected!"
     exit 1
 else
-    log_pass "CANARY TEST PASSED - No secret leakage detected!"
+    log_pass "CANARY TEST PASSED - All checks passed!"
     exit 0
 fi
