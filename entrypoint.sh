@@ -197,28 +197,22 @@ done
 log_info "Executing: robot ${SAFE_LOG_ARGS[*]}"
 robot "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
 
-# SECURITY: Scrub sensitive values from generated artifacts
+# SECURITY: Scrub sensitive values from generated artifacts using Python scrubber
 # Robot Framework logs variable values in output.xml, log.html, and report.html.
-# We replace these values with [SCRUBBED] to prevent leakage in artifacts.
+# The scrubber replaces values (including XML/HTML escaped variants) with [SCRUBBED].
+# Values are passed via env vars to avoid printing them to console.
 log_info "Scrubbing sensitive values from report artifacts..."
-SCRUB_COUNT=0
-for scrub_value in "${SCRUB_VALUES[@]}"; do
-    # Skip empty values or very short values that might cause false positives
-    if [ -n "$scrub_value" ] && [ ${#scrub_value} -ge 4 ]; then
-        for artifact in "$REPORT_DIR"/*.xml "$REPORT_DIR"/*.html; do
-            if [ -f "$artifact" ]; then
-                # Use perl for reliable fixed-string replacement (handles special chars)
-                if grep -qF "$scrub_value" "$artifact" 2>/dev/null; then
-                    perl -pi -e "s/\Q$scrub_value\E/[SCRUBBED]/g" "$artifact"
-                    SCRUB_COUNT=$((SCRUB_COUNT + 1))
-                fi
-            fi
-        done
-    fi
-done
-if [ $SCRUB_COUNT -gt 0 ]; then
-    log_info "Scrubbed $SCRUB_COUNT artifact file(s)"
-fi
+
+# Pass values to scrubber via environment variables (null-separated, never printed)
+# The scrubber reads RF_* env vars directly, plus _SCRUB_TARGET_URL
+export _SCRUB_TARGET_URL="$TARGET_URL"
+
+# Run Python scrubber - errors are caught internally, always exits 0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/scrub_artifacts.py" "$REPORT_DIR" || true
+
+# Clean up env var
+unset _SCRUB_TARGET_URL
 
 # 輸出結果
 if [ $EXIT_CODE -eq 0 ]; then
