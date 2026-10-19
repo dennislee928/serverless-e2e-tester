@@ -133,7 +133,7 @@ env:
 | `timeout` | 測試逾時，例如 `5 minutes` | 否 | - |
 | `log_level` | `TRACE`、`DEBUG`、`INFO`、`WARN`、`ERROR`、`NONE` | 否 | `INFO` |
 | `artifact_name` | 報告 artifact 名稱 | 否 | `robot-framework-reports` |
-| `artifact_retention_days` | artifact 保留天數 | 否 | `7` |
+| `artifact_retention_days` | artifact 保留天數（建議 1-3 天） | 否 | `3` |
 
 ## Outputs
 
