@@ -42,7 +42,8 @@ CANARY_NOSCAN_3="canary-noscan-secret-gamma"
 # RF_ values with canary naming
 CANARY_RF_VAL_1="canary-rf-value-one-12345"
 CANARY_RF_VAL_2="canary-rf-data<test>&check|val"
-CANARY_RF_VAL_3='canary-rf-"quoted"&val<x>/$|@end'
+# Value 3 contains ALL special chars including both ' and "
+CANARY_RF_VAL_3="canary-rf-\"dq'sq\"&val<x>/\$|@-end"
 
 # Target URL with userinfo
 CANARY_TARGET_URL="http://canary-user:canary-pass-xyz@localhost:8080/api/v1"
@@ -142,8 +143,10 @@ log_info "RF_ canary 2 escaped forms in artifacts:"
 check_artifact "  RF canary 2 HTML" "canary-rf-data&lt;test&gt;&amp;check|val"
 
 log_info "RF_ canary 3 (quoted) escaped forms in artifacts:"
-check_artifact "  RF canary 3 HTML" 'canary-rf-&quot;quoted&quot;&amp;val&lt;x&gt;/$|@end'
-check_artifact "  RF canary 3 JS" 'canary-rf-\"quoted\"&val<x>\/$|@end'
+# HTML quote=True form: " → &quot;
+check_artifact "  RF canary 3 HTML quote=True" 'canary-rf-&quot;dq'"'"'sq&quot;&amp;val&lt;x&gt;/$|@-end'
+# Robot actual form: html.escape(quote=False) then " → \" only
+check_artifact "  RF canary 3 Robot actual" 'canary-rf-\"dq'"'"'sq\"&amp;val&lt;x&gt;/$|@-end'
 
 log_info "Target URL and userinfo in artifacts:"
 check_artifact "  Target URL" "$CANARY_TARGET_URL"

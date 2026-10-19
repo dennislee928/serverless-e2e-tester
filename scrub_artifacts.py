@@ -96,13 +96,23 @@ def get_escaped_variants(value: str) -> list[str]:
         pass
     
     # JS escaped combined with HTML escaping (log.html has JS with HTML-escaped content)
+    # This is the WRONG form - escapes ' and / which Robot doesn't do
     try:
-        js_html = html.escape(value, quote=False)
-        js_html = js_html.replace("\\", "\\\\")
-        js_html = js_html.replace('"', '\\"')
-        js_html = js_html.replace("'", "\\'")
-        js_html = js_html.replace("/", "\\/")
-        variants.add(js_html)
+        js_html_wrong = html.escape(value, quote=False)
+        js_html_wrong = js_html_wrong.replace("\\", "\\\\")
+        js_html_wrong = js_html_wrong.replace('"', '\\"')
+        js_html_wrong = js_html_wrong.replace("'", "\\'")
+        js_html_wrong = js_html_wrong.replace("/", "\\/")
+        variants.add(js_html_wrong)
+    except Exception:
+        pass
+    
+    # Robot ACTUAL form in log.html/report.html:
+    # html.escape(quote=False) then ONLY " → \" (single quote ' and / are NOT escaped)
+    try:
+        robot_actual = html.escape(value, quote=False)
+        robot_actual = robot_actual.replace('"', '\\"')
+        variants.add(robot_actual)
     except Exception:
         pass
     
