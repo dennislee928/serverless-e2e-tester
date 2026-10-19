@@ -25,6 +25,14 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# SECURITY: Mask userinfo (user:password@) in URLs for logging
+mask_url_userinfo() {
+    local url="$1"
+    # Replace user:password@ with user:***@ in URLs
+    # Matches http(s)://user:password@host patterns
+    echo "$url" | sed -E 's|(https?://)([^:]+):([^@]+)@|\1\2:***@|g'
+}
+
 # 解析輸入參數
 TEST_DIR="${1:-}"
 TARGET_URL="${2:-}"
@@ -56,7 +64,7 @@ fi
 
 log_info "Starting Robot Framework E2E Tests"
 log_info "Test Directory: $TEST_DIR"
-log_info "Target URL: $TARGET_URL"
+log_info "Target URL: $(mask_url_userinfo "$TARGET_URL")"
 log_info "Report Directory: $REPORT_DIR"
 
 # 建立報告目錄
@@ -70,12 +78,15 @@ log_info "Injecting environment variables as Robot Framework variables..."
 # 建立變數陣列（避免使用 eval，提高安全性）
 ROBOT_VARIABLES=()
 ROBOT_VAR_NAMES=()
+# SECURITY: Track values for post-run artifact scrubbing
+SCRUB_VALUES=()
 
 # 注入 TARGET_URL 作為 BASE_URL 和 TARGET_URL 變數（常用於測試）
 ROBOT_VARIABLES+=("BASE_URL:$TARGET_URL")
 ROBOT_VARIABLES+=("TARGET_URL:$TARGET_URL")
 ROBOT_VAR_NAMES+=("BASE_URL")
 ROBOT_VAR_NAMES+=("TARGET_URL")
+SCRUB_VALUES+=("$TARGET_URL")
 
 # SECURITY FIX: Only process environment variables with explicit RF_ prefix.
 # This is an allowlist approach that prevents secrets from being accidentally exposed.
@@ -91,8 +102,11 @@ while IFS='=' read -r key value; do
     if [[ "$key" =~ ^RF_[A-Z][A-Z0-9_]*$ ]] && [[ -n "${!key:-}" ]]; then
         # Strip the RF_ prefix for the Robot Framework variable name
         robot_var_name="${key#RF_}"
-        ROBOT_VARIABLES+=("$robot_var_name:${!key}")
+        var_value="${!key}"
+        ROBOT_VARIABLES+=("$robot_var_name:$var_value")
         ROBOT_VAR_NAMES+=("$robot_var_name")
+        # Track value for post-run artifact scrubbing
+        SCRUB_VALUES+=("$var_value")
     fi
 done < <(env | sort || true)
 
@@ -182,6 +196,29 @@ done
 # 執行 robot 命令
 log_info "Executing: robot ${SAFE_LOG_ARGS[*]}"
 robot "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
+
+# SECURITY: Scrub sensitive values from generated artifacts
+# Robot Framework logs variable values in output.xml, log.html, and report.html.
+# We replace these values with [SCRUBBED] to prevent leakage in artifacts.
+log_info "Scrubbing sensitive values from report artifacts..."
+SCRUB_COUNT=0
+for scrub_value in "${SCRUB_VALUES[@]}"; do
+    # Skip empty values or very short values that might cause false positives
+    if [ -n "$scrub_value" ] && [ ${#scrub_value} -ge 4 ]; then
+        for artifact in "$REPORT_DIR"/*.xml "$REPORT_DIR"/*.html; do
+            if [ -f "$artifact" ]; then
+                # Use perl for reliable fixed-string replacement (handles special chars)
+                if grep -qF "$scrub_value" "$artifact" 2>/dev/null; then
+                    perl -pi -e "s/\Q$scrub_value\E/[SCRUBBED]/g" "$artifact"
+                    SCRUB_COUNT=$((SCRUB_COUNT + 1))
+                fi
+            fi
+        done
+    fi
+done
+if [ $SCRUB_COUNT -gt 0 ]; then
+    log_info "Scrubbed $SCRUB_COUNT artifact file(s)"
+fi
 
 # 輸出結果
 if [ $EXIT_CODE -eq 0 ]; then
