@@ -53,6 +53,32 @@ Log Truncated Userinfo Fragment
     Log    RequestsLibrary connection attempt: ${truncated_fragment}
     Should Not Be Empty    ${truncated_fragment}
 
+Log Password Prefix Only Decoded
+    [Documentation]    Simulate truncated log showing only password prefix (decoded form).
+    ...                Tests prefix scrubbing when full password never appears.
+    ...                Prefix: canary-pass (first 11 chars of canary-pass-xyz)
+    [Tags]    artifact-leakage    userinfo    prefix
+    ${prefix_decoded}=    Set Variable    canary-pass
+    Log    Truncated auth debug: user:${prefix_decoded}...
+    Should Not Be Empty    ${prefix_decoded}
+
+Log Password Prefix Only Encoded
+    [Documentation]    Simulate URL-encoded password prefix in truncated log.
+    ...                Tests prefix scrubbing of encoded variants.
+    ...                Simulates: canary%2Dpass (URL-encoded prefix)
+    [Tags]    artifact-leakage    userinfo    prefix    encoded
+    ${prefix_encoded}=    Set Variable    canary%2Dpass
+    Log    URL encoded truncated auth: ${prefix_encoded}...
+    Should Not Be Empty    ${prefix_encoded}
+
+Log RF URL Password Prefix
+    [Documentation]    Simulate RF_* URL value with only password prefix appearing.
+    ...                Tests that RF URL passwords are also prefix-scrubbed.
+    [Tags]    artifact-leakage    rf-url    prefix
+    ${rf_url_prefix}=    Set Variable    canary-pass-x
+    Log    RF URL auth fragment: user:${rf_url_prefix}@host
+    Should Not Be Empty    ${rf_url_prefix}
+
 Canary Test Passes
     [Documentation]    Simple pass test to ensure test suite runs
     [Tags]    smoke
