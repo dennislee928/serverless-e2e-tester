@@ -69,15 +69,22 @@ runs:
 
     - name: Install Robot Framework dependencies
       shell: bash
+      env:
+        INPUT_PROCESSES: ${{ inputs.processes }}
       run: |
         pip install --quiet \
           robotframework>=6.0.0 \
           robotframework-requests>=0.9.4 \
           robotframework-jsonlibrary>=0.5 \
           requests>=2.28.0
-        # Install pabot for parallel execution if processes > 1
-        if [ "${{ inputs.processes }}" != "1" ] && [ -n "${{ inputs.processes }}" ]; then
-          pip install --quiet robotframework-pabot>=2.16.0
+        
+        # Validate processes input and install pabot if needed
+        if [[ "$INPUT_PROCESSES" =~ ^[0-9]+$ ]]; then
+          if [ "$INPUT_PROCESSES" -gt 1 ]; then
+            pip install --quiet robotframework-pabot>=2.16.0
+          fi
+        else
+          echo "::warning::Invalid processes value '$INPUT_PROCESSES', will use sequential execution"
         fi
 
     - name: Run Robot Framework Tests
@@ -119,6 +126,9 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact_name }}
-        path: ${{ inputs.report_dir }}/
+        path: |
+          ${{ inputs.report_dir }}/output.xml
+          ${{ inputs.report_dir }}/log.html
+          ${{ inputs.report_dir }}/report.html
         retention-days: ${{ inputs.artifact_retention_days }}
-        if-no-files-found: warn
+        if-no-files-found: ignore
