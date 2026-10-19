@@ -33,7 +33,7 @@ jobs:
         with:
           name: robot-framework-reports
           path: reports/
-          retention-days: 7
+          retention-days: 3  # 建議 1-3 天，報告可能含敏感資料
 ```
 
 ## 環境變數與 Robot Framework 變數
@@ -66,9 +66,9 @@ jobs:
 
 1. **Allowlist 機制：** 只有帶 `RF_` 前綴的環境變數會被轉換為 Robot Framework 變數。未帶前綴的環境變數（包括 GitHub secrets）不會被自動注入。
 
-2. **Console 日誌遮蔽：** **僅 console 輸出**的變數值會以 `[REDACTED]` 取代顯示。這適用於 GitHub Actions 執行日誌。
+2. **Console 日誌部分遮蔽：** 執行命令列中的變數值會以 `[REDACTED]` 顯示。**但請注意：當測試失敗時，Robot Framework 的 FAIL 摘要可能會在 console 明文顯示變數值。** 此行為無法完全避免，請勿將 RF_* 值放入會出現在 FAIL 訊息中的位置。
 
-3. **Artifact 清洗：** 測試完成後，報告檔案（`output.xml`、`log.html`、`report.html`）中的 `RF_*` 變數值會被替換為 `[SCRUBBED]`。
+3. **Artifact 清洗：** 測試完成後，報告檔案（`output.xml`、`log.html`、`report.html`）中的 `RF_*` 變數值（包含 XML/HTML escaped 形式如 `&amp;`、`&lt;`、`&gt;`）會被替換為 `[SCRUBBED]`。
 
 4. **URL 安全：** 如果 `target_url` 包含 userinfo（如 `https://user:password@host`），密碼部分會在日誌中遮蔽為 `***`。
 
@@ -79,6 +79,22 @@ jobs:
 - **請勿將高度敏感的 secrets 透過 `RF_*` 傳遞**（如資料庫密碼、私鑰等）
 - 雖然 artifact 會被清洗，但處理過程中值仍會短暫存在於記憶體和磁碟
 - 若您必須使用敏感資料，請考慮使用 `variable_file` 並確保檔案不會被上傳
+
+#### RF_PASSWORD 注意事項
+
+即使您將變數命名為 `RF_PASSWORD`，它仍會被當作一般 RF_* 變數處理：
+
+```yaml
+env:
+  RF_PASSWORD: ${{ secrets.DB_PASSWORD }}  # ⚠️ 仍會被傳入 Robot Framework
+```
+
+這個值會：
+- 成為 Robot Framework 變數 `${PASSWORD}`
+- 被清洗器從 artifact 中移除
+- **但可能在測試失敗時出現於 console FAIL 摘要中**
+
+**建議：** 避免使用 `RF_PASSWORD`、`RF_SECRET`、`RF_TOKEN` 等命名傳遞高度敏感資料。
 
 ### Artifact 處理建議
 
@@ -91,16 +107,17 @@ jobs:
   with:
     name: robot-framework-reports
     path: reports/
-    retention-days: 3  # 建議設定較短的保留時間
+    retention-days: 3  # 建議 1-3 天
 ```
 
 ### 最佳實務
 
 - 使用 `RF_` 前綴明確標示要傳遞給測試的變數
 - **避免透過 `RF_*` 傳遞高度敏感的 secrets**
-- 將 artifact `retention-days` 設為較短時間（如 1-3 天）
+- 將 artifact `retention-days` 設為較短時間（1-3 天）
 - 使用 `variable_file` 搭配 `.gitignore` 管理本地測試的敏感設定
 - 避免在測試中使用 `Log` 關鍵字記錄敏感資料
+- **避免將 RF_* 值放入會出現在 Fail 訊息或 assertion 錯誤中的位置**
 
 ## Inputs
 
