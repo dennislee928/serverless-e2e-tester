@@ -25,6 +25,14 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# SECURITY: Mask userinfo (user:password@) in URLs for logging
+mask_url_userinfo() {
+    local url="$1"
+    # Replace user:password@ with user:***@ in URLs
+    # Matches http(s)://user:password@host patterns
+    echo "$url" | sed -E 's|(https?://)([^:]+):([^@]+)@|\1\2:***@|g'
+}
+
 # 解析輸入參數
 TEST_DIR="${1:-}"
 TARGET_URL="${2:-}"
@@ -56,47 +64,58 @@ fi
 
 log_info "Starting Robot Framework E2E Tests"
 log_info "Test Directory: $TEST_DIR"
-log_info "Target URL: $TARGET_URL"
+log_info "Target URL: $(mask_url_userinfo "$TARGET_URL")"
 log_info "Report Directory: $REPORT_DIR"
 
 # 建立報告目錄
 mkdir -p "$REPORT_DIR"
 
 # 注入環境變數為 Robot Framework 變數
+# SECURITY: Only variables with the RF_ prefix are converted to Robot Framework variables.
+# This prevents accidental exposure of secrets in logs or generated reports.
 log_info "Injecting environment variables as Robot Framework variables..."
-SECRET_COUNT=0
 
 # 建立變數陣列（避免使用 eval，提高安全性）
 ROBOT_VARIABLES=()
+ROBOT_VAR_NAMES=()
+# SECURITY: Track values for post-run artifact scrubbing
+SCRUB_VALUES=()
 
 # 注入 TARGET_URL 作為 BASE_URL 和 TARGET_URL 變數（常用於測試）
 ROBOT_VARIABLES+=("BASE_URL:$TARGET_URL")
 ROBOT_VARIABLES+=("TARGET_URL:$TARGET_URL")
-SECRET_COUNT=2
+ROBOT_VAR_NAMES+=("BASE_URL")
+ROBOT_VAR_NAMES+=("TARGET_URL")
+SCRUB_VALUES+=("$TARGET_URL")
 
-# 掃描環境變數，找出可能的 secrets 和配置
-# 注意：GitHub Actions 會將 secrets 設為環境變數，但我們只處理明確的變數
-# 避免處理系統變數（PATH, HOME, etc.）
-EXCLUDE_VARS="PATH|HOME|PWD|SHELL|USER|LANG|LC_|TERM|_|GITHUB_|RUNNER_|INPUT_"
+# SECURITY FIX: Only process environment variables with explicit RF_ prefix.
+# This is an allowlist approach that prevents secrets from being accidentally exposed.
+# Users must explicitly opt-in by prefixing variables with RF_.
+# The RF_ prefix is stripped when creating the Robot Framework variable name.
+# Example: RF_API_KEY=secret -> Robot variable ${API_KEY}
 
 while IFS='=' read -r key value; do
     # 跳過空行
     [[ -z "$key" ]] && continue
     
-    # 跳過排除的變數
-    if [[ "$key" =~ ^($EXCLUDE_VARS) ]]; then
-        continue
-    fi
-    
-    # 只處理大寫變數（通常是配置或 secrets）
-    if [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] && [[ -n "${!key:-}" ]]; then
-        # Robot Framework 變數值不需要轉義，直接使用
-        ROBOT_VARIABLES+=("$key:${!key}")
-        SECRET_COUNT=$((SECRET_COUNT + 1))
+    # Only process variables with RF_ prefix (explicit allowlist)
+    if [[ "$key" =~ ^RF_[A-Z][A-Z0-9_]*$ ]] && [[ -n "${!key:-}" ]]; then
+        # Strip the RF_ prefix for the Robot Framework variable name
+        robot_var_name="${key#RF_}"
+        var_value="${!key}"
+        ROBOT_VARIABLES+=("$robot_var_name:$var_value")
+        ROBOT_VAR_NAMES+=("$robot_var_name")
+        # Track value for post-run artifact scrubbing
+        SCRUB_VALUES+=("$var_value")
     fi
 done < <(env | sort || true)
 
-log_info "Injected $SECRET_COUNT variables as Robot Framework variables"
+VAR_COUNT=${#ROBOT_VAR_NAMES[@]}
+log_info "Injected $VAR_COUNT variables as Robot Framework variables"
+# SECURITY: Only log variable names, never values
+if [ $VAR_COUNT -gt 0 ]; then
+    log_info "Variables injected: ${ROBOT_VAR_NAMES[*]}"
+fi
 
 # 建構 robot 命令參數陣列（安全執行，避免命令注入）
 EXIT_CODE=0
@@ -104,8 +123,6 @@ ROBOT_ARGS=()
 
 # 設定基本參數
 ROBOT_ARGS+=("--outputdir" "$REPORT_DIR")
-ROBOT_ARGS+=("--logdir" "$REPORT_DIR")
-ROBOT_ARGS+=("--reportdir" "$REPORT_DIR")
 ROBOT_ARGS+=("--loglevel" "$LOG_LEVEL")
 
 # 添加標籤過濾
@@ -159,9 +176,43 @@ done
 # 添加測試目錄
 ROBOT_ARGS+=("$TEST_DIR")
 
+# SECURITY: Build a sanitized version of arguments for logging that redacts variable values
+SAFE_LOG_ARGS=()
+NEXT_IS_VAR_VALUE=false
+for arg in "${ROBOT_ARGS[@]}"; do
+    if [ "$NEXT_IS_VAR_VALUE" = true ]; then
+        # Redact the value part of --variable NAME:VALUE
+        var_name="${arg%%:*}"
+        SAFE_LOG_ARGS+=("$var_name:[REDACTED]")
+        NEXT_IS_VAR_VALUE=false
+    elif [ "$arg" = "--variable" ]; then
+        SAFE_LOG_ARGS+=("$arg")
+        NEXT_IS_VAR_VALUE=true
+    else
+        SAFE_LOG_ARGS+=("$arg")
+    fi
+done
+
 # 執行 robot 命令
-log_info "Executing: robot ${ROBOT_ARGS[*]}"
+log_info "Executing: robot ${SAFE_LOG_ARGS[*]}"
 robot "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
+
+# SECURITY: Scrub sensitive values from generated artifacts using Python scrubber
+# Robot Framework logs variable values in output.xml, log.html, and report.html.
+# The scrubber replaces values (including XML/HTML escaped variants) with [SCRUBBED].
+# Values are passed via env vars to avoid printing them to console.
+log_info "Scrubbing sensitive values from report artifacts..."
+
+# Pass values to scrubber via environment variables (null-separated, never printed)
+# The scrubber reads RF_* env vars directly, plus _SCRUB_TARGET_URL
+export _SCRUB_TARGET_URL="$TARGET_URL"
+
+# Run Python scrubber - errors are caught internally, always exits 0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/scrub_artifacts.py" "$REPORT_DIR" || true
+
+# Clean up env var
+unset _SCRUB_TARGET_URL
 
 # 輸出結果
 if [ $EXIT_CODE -eq 0 ]; then

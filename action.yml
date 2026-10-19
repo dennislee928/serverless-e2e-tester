@@ -44,9 +44,9 @@ inputs:
     required: false
     default: 'robot-framework-reports'
   artifact_retention_days:
-    description: 'Number of days to retain the artifact'
+    description: 'Number of days to retain the artifact (recommended: 1-3 days for security)'
     required: false
-    default: '7'
+    default: '3'
 
 outputs:
   exit_code:
