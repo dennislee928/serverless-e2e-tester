@@ -36,18 +36,46 @@ jobs:
           retention-days: 7
 ```
 
-GitHub Secrets 會以同名環境變數注入，並在 Robot Framework 裡變成變數。`target_url` 會同時提供 `${BASE_URL}` 與 `${TARGET_URL}`。
+## 環境變數與 Robot Framework 變數
+
+`target_url` 會自動提供 `${BASE_URL}` 與 `${TARGET_URL}` 變數給 Robot Framework 測試使用。
+
+### 傳遞自訂變數（RF_ 前綴）
+
+若要將環境變數傳遞給 Robot Framework，必須使用 `RF_` 前綴。這是一種安全的 allowlist 機制，可防止 secrets 意外洩漏到日誌或報告中。
 
 ```yaml
 - name: Run Robot Framework Tests
   uses: dennislee928/serverless-e2e-tester@v0.1.0
   env:
-    API_KEY: ${{ secrets.API_KEY }}
-    AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+    RF_API_KEY: ${{ secrets.API_KEY }}
+    RF_AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+    RF_ENVIRONMENT: production
   with:
     test_dir: tests
     target_url: https://your-api.workers.dev
 ```
+
+`RF_` 前綴會在轉換時被移除，所以在 Robot Framework 測試中使用 `${API_KEY}`、`${AUTH_TOKEN}`、`${ENVIRONMENT}` 等變數名稱（不含 `RF_` 前綴）。
+
+## Security
+
+### Secret 處理警告
+
+**重要：** 此 Action 實作了以下安全措施來防止 secret 洩漏：
+
+1. **Allowlist 機制：** 只有帶 `RF_` 前綴的環境變數會被轉換為 Robot Framework 變數。未帶前綴的環境變數（包括 GitHub secrets）不會被自動注入。
+
+2. **日誌遮蔽：** 執行日誌只會顯示變數名稱，不會顯示變數值。所有值都會以 `[REDACTED]` 取代。
+
+3. **報告注意事項：** Robot Framework 生成的報告（`log.html`、`report.html`、`output.xml`）可能包含測試過程中使用的變數值。**GitHub 的日誌遮蔽不適用於 artifact 檔案內容。** 請謹慎處理包含敏感資料的報告。
+
+### 最佳實務
+
+- 使用 `RF_` 前綴明確標示要傳遞給測試的變數
+- 避免在測試中記錄敏感資料
+- 考慮對包含敏感資訊的報告設定較短的 retention 時間
+- 使用 `variable_file` 搭配 `.gitignore` 管理本地測試的敏感設定
 
 ## Inputs
 
