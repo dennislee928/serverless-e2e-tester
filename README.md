@@ -33,6 +33,40 @@ jobs:
 
 **注意：** Artifact 上傳功能已內建於此 Action，無需另外呼叫 `actions/upload-artifact`。若要停用自動上傳，設定 `upload_artifact: 'false'`。
 
+## ⚠️ 升級注意事項 (Migration Note)
+
+**從舊版升級的使用者請注意：** 此版本內建 artifact 上傳功能，預設使用 `robot-framework-reports` 作為 artifact 名稱。如果您的 workflow 已有自己加的 `upload-artifact` step 且使用相同名稱，會造成 name conflict。
+
+**解決方式（二擇一）：**
+
+**方式一：移除自己的 upload-artifact step（推薦）**
+```yaml
+- name: Run Robot Framework Tests
+  uses: dennislee928/serverless-e2e-tester@v0.1.0
+  with:
+    test_dir: tests
+    target_url: https://your-api.workers.dev
+    # 內建上傳已啟用，無需額外 step
+```
+
+**方式二：停用內建上傳，保留自己的 step**
+```yaml
+- name: Run Robot Framework Tests
+  uses: dennislee928/serverless-e2e-tester@v0.1.0
+  with:
+    test_dir: tests
+    target_url: https://your-api.workers.dev
+    upload_artifact: 'false'  # 停用內建上傳
+
+- name: Upload Test Reports  # 保留您自己的 step
+  uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: robot-framework-reports
+    path: reports/
+    retention-days: 3
+```
+
 ## 平行執行 (pabot)
 
 設定 `processes` 大於 1 時，此 Action 會自動安裝並使用 [pabot](https://pabot.org/)（robotframework-pabot）進行平行測試：
@@ -87,6 +121,12 @@ jobs:
 
 5. **Userinfo 密碼獨立清洗：** 從 URL 型環境變數（`TARGET_URL`、`RF_*` 中的 URL 值）解析出 userinfo 的密碼部分，作為獨立的清洗目標。即使完整 URL 未出現在 artifact 中，只有 `username:password@` 片段出現也會被清洗。這可處理 RequestsLibrary 等套件記錄截斷 URL 片段的情況。
 
+6. **Prefix 截斷清洗：** 敏感值的前綴（prefix）也會被清洗，從完整值到最短 6 個字元為止。這可處理日誌或錯誤訊息截斷敏感值只顯示前幾個字元的情況。每種 escaped 變體（raw、HTML、JS、Robot 實際形）都會產生對應的 prefix 形。替換順序由長到短，避免短 prefix 先吃掉長的。
+   - **最短長度：6 字元** — 足以避免誤 scrub 常見字串，又能涵蓋有意義的截斷形
+   - 例如：密碼 `secret-pass-xyz` 的 prefix `secret`、`secret-`、`secret-p`... 都會被清洗
+
+7. **遞迴清洗：** 清洗器會遞迴處理整個報告目錄（含子目錄如 `pabot_results/`），涵蓋 `.xml`、`.html`、`.txt`、`.log`、`.out` 及無副檔名的文字檔。二進位檔會安全跳過。
+
 ### ⚠️ RF_* 是明文 Opt-in 機制
 
 使用 `RF_` 前綴代表您**明確選擇**將該值傳遞給 Robot Framework 作為變數。請注意：
@@ -130,6 +170,26 @@ env:
     artifact_name: my-test-reports
     artifact_retention_days: 1  # 建議 1-3 天
 ```
+
+### Artifact 上傳範圍 (Upload Allowlist)
+
+為安全起見，此 Action 只上傳已清洗的 **merged reports**：
+
+| 上傳的檔案 | 說明 |
+| --- | --- |
+| `output.xml` | Robot Framework 測試結果 XML |
+| `log.html` | 詳細測試日誌 |
+| `report.html` | 測試報告摘要 |
+
+**不上傳的檔案（Side files）：**
+
+| 排除的路徑 | 原因 |
+| --- | --- |
+| `pabot_results/` | 含 raw `--variable NAME:VALUE` 及 worker log，可能有未 escaped 的敏感值 |
+| `robot_argfile.txt` | 直接含變數值明文 |
+| Worker stdout/stderr | 可能含測試 FAIL 時的敏感值 |
+
+這些 side files 仍會被遞迴清洗（作為第二道防線），但不會被上傳至 artifact。如需自行上傳完整目錄，請設定 `upload_artifact: 'false'` 並自行處理。
 
 ### 最佳實務
 
