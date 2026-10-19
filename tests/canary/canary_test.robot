@@ -44,6 +44,15 @@ Log Third Canary Variable With Quotes
     Log    CANARY_QUOTED value is: ${CANARY_QUOTED}
     Should Not Be Empty    ${CANARY_QUOTED}
 
+Log Truncated Userinfo Fragment
+    [Documentation]    Simulate RequestsLibrary truncating URL to show userinfo fragment.
+    ...                Tests scrubbing of password appearing without full URL context.
+    ...                Example: when RequestsLibrary logs "connecting to canary-user:canary-pass-xyz@localhost"
+    [Tags]    artifact-leakage    userinfo    truncated
+    ${truncated_fragment}=    Set Variable    canary-user:canary-pass-xyz@localhost:8080
+    Log    RequestsLibrary connection attempt: ${truncated_fragment}
+    Should Not Be Empty    ${truncated_fragment}
+
 Canary Test Passes
     [Documentation]    Simple pass test to ensure test suite runs
     [Tags]    smoke

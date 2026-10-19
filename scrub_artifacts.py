@@ -11,12 +11,45 @@ Design principles:
 - Handles special chars: / $ | @ & < > " ' etc.
 - Per-value try/except: single value failure skips only that value
 - Always exits 0 to preserve Robot's original exit code
+- Extracts passwords from URL userinfo for independent scrubbing
 """
 
 import html
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+
+def extract_url_password(url_value: str) -> list[str]:
+    """
+    Extract password from URL userinfo if present.
+    Returns list of password variants (raw and URL-decoded) to add to scrub list.
+    
+    Handles URLs like: http://user:password@host:port/path
+    Also handles URL-encoded passwords.
+    """
+    passwords = []
+    if not url_value:
+        return passwords
+    
+    try:
+        parsed = urlparse(url_value)
+        if parsed.password:
+            raw_password = parsed.password
+            passwords.append(raw_password)
+            
+            # Also add URL-decoded version if different
+            try:
+                decoded = unquote(raw_password)
+                if decoded != raw_password and decoded not in passwords:
+                    passwords.append(decoded)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    return passwords
 
 
 def get_escaped_variants(value: str) -> list[str]:
@@ -179,12 +212,21 @@ def main():
     target_url = os.environ.get("_SCRUB_TARGET_URL", "")
     if target_url and target_url not in values_to_scrub:
         values_to_scrub.append(target_url)
+        # Extract password from URL userinfo for independent scrubbing
+        for pwd in extract_url_password(target_url):
+            if pwd and len(pwd) >= 4 and pwd not in values_to_scrub:
+                values_to_scrub.append(pwd)
     
     # Get RF_* prefixed values directly from environment
     for key, value in os.environ.items():
         if key.startswith("RF_") and value and len(value) >= 4:
             if value not in values_to_scrub:
                 values_to_scrub.append(value)
+            # Check if RF_* value looks like a URL with userinfo
+            if "://" in value and "@" in value:
+                for pwd in extract_url_password(value):
+                    if pwd and len(pwd) >= 4 and pwd not in values_to_scrub:
+                        values_to_scrub.append(pwd)
     
     if not values_to_scrub:
         sys.exit(0)

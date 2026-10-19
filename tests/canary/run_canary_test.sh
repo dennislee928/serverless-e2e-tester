@@ -150,7 +150,11 @@ check_artifact "  RF canary 3 Robot actual" 'canary-rf-\"dq'"'"'sq\"&amp;val&lt;
 
 log_info "Target URL and userinfo in artifacts:"
 check_artifact "  Target URL" "$CANARY_TARGET_URL"
-check_artifact "  Userinfo password" "$CANARY_USERINFO_PASS"
+check_artifact "  Userinfo password standalone" "$CANARY_USERINFO_PASS"
+
+log_info "Truncated userinfo fragment (RequestsLibrary simulation):"
+CANARY_TRUNCATED_FRAGMENT="canary-user:canary-pass-xyz@localhost:8080"
+check_artifact "  Truncated userinfo fragment" "$CANARY_TRUNCATED_FRAGMENT"
 
 # =============================================================================
 # CONSOLE CHECKS (separate - may have FAIL summary leaks)
