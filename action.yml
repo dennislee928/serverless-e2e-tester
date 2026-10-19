@@ -3,9 +3,8 @@ description: 'Run Robot Framework API tests with no local setup. Built for serve
 
 author: 'Dennislee928'
 
-# Marketplace 的視覺設定
 branding:
-  icon: 'check-circle'  # 可選圖示: https://feathericons.com/
+  icon: 'check-circle'
   color: 'green'
 
 inputs:
@@ -29,7 +28,7 @@ inputs:
     description: 'Path to Robot Framework variable file, or comma-separated paths for multiple files'
     required: false
   processes:
-    description: 'Number of parallel processes for test execution (default: 1, sequential)'
+    description: 'Number of parallel processes for test execution (default: 1 uses robot, >1 uses pabot)'
     required: false
     default: '1'
   timeout:
@@ -47,25 +46,89 @@ inputs:
     description: 'Number of days to retain the artifact (recommended: 1-3 days for security)'
     required: false
     default: '3'
+  upload_artifact:
+    description: 'Whether to upload test reports as artifact (default: true)'
+    required: false
+    default: 'true'
 
 outputs:
   exit_code:
     description: 'Exit code from Robot Framework execution (0 = success, non-zero = failure)'
+    value: ${{ steps.run-tests.outputs.exit_code }}
   report_path:
     description: 'Path to the generated test report directory'
+    value: ${{ steps.run-tests.outputs.report_path }}
 
 runs:
-  using: 'docker'
-  image: 'Dockerfile'
-  args:
-    - ${{ inputs.test_dir }}
-    - ${{ inputs.target_url }}
-    - ${{ inputs.report_dir }}
-    - ${{ inputs.include_tags }}
-    - ${{ inputs.exclude_tags }}
-    - ${{ inputs.variable_file }}
-    - ${{ inputs.processes }}
-    - ${{ inputs.timeout }}
-    - ${{ inputs.log_level }}
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
+    - name: Install Robot Framework dependencies
+      shell: bash
+      env:
+        INPUT_PROCESSES: ${{ inputs.processes }}
+      run: |
+        pip install --quiet \
+          robotframework>=6.0.0 \
+          robotframework-requests>=0.9.4 \
+          robotframework-jsonlibrary>=0.5 \
+          requests>=2.28.0
+        
+        # Validate processes input and install pabot if needed
+        if [[ "$INPUT_PROCESSES" =~ ^[0-9]+$ ]]; then
+          if [ "$INPUT_PROCESSES" -gt 1 ]; then
+            pip install --quiet robotframework-pabot>=2.16.0
+          fi
+        else
+          echo "::warning::Invalid processes value '$INPUT_PROCESSES', will use sequential execution"
+        fi
 
+    - name: Run Robot Framework Tests
+      id: run-tests
+      shell: bash
+      env:
+        INPUT_TEST_DIR: ${{ inputs.test_dir }}
+        INPUT_TARGET_URL: ${{ inputs.target_url }}
+        INPUT_REPORT_DIR: ${{ inputs.report_dir }}
+        INPUT_INCLUDE_TAGS: ${{ inputs.include_tags }}
+        INPUT_EXCLUDE_TAGS: ${{ inputs.exclude_tags }}
+        INPUT_VARIABLE_FILE: ${{ inputs.variable_file }}
+        INPUT_PROCESSES: ${{ inputs.processes }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_LOG_LEVEL: ${{ inputs.log_level }}
+      run: |
+        # Run entrypoint script with inputs
+        ROBOT_EXIT_CODE=0
+        bash "${{ github.action_path }}/entrypoint.sh" \
+          "$INPUT_TEST_DIR" \
+          "$INPUT_TARGET_URL" \
+          "$INPUT_REPORT_DIR" \
+          "$INPUT_INCLUDE_TAGS" \
+          "$INPUT_EXCLUDE_TAGS" \
+          "$INPUT_VARIABLE_FILE" \
+          "$INPUT_PROCESSES" \
+          "$INPUT_TIMEOUT" \
+          "$INPUT_LOG_LEVEL" || ROBOT_EXIT_CODE=$?
+        
+        # Set outputs
+        echo "exit_code=$ROBOT_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        echo "report_path=$INPUT_REPORT_DIR" >> "$GITHUB_OUTPUT"
+        
+        # Exit with Robot's exit code
+        exit $ROBOT_EXIT_CODE
+
+    - name: Upload Test Reports
+      if: always() && inputs.upload_artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: |
+          ${{ inputs.report_dir }}/output.xml
+          ${{ inputs.report_dir }}/log.html
+          ${{ inputs.report_dir }}/report.html
+        retention-days: ${{ inputs.artifact_retention_days }}
+        if-no-files-found: ignore
