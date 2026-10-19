@@ -156,10 +156,16 @@ if [ -n "$VARIABLE_FILE" ]; then
     done
 fi
 
-# 添加並行執行
+# Determine execution mode: robot (sequential) or pabot (parallel)
+USE_PABOT=false
 if [ -n "$PROCESSES" ] && [ "$PROCESSES" != "1" ]; then
-    ROBOT_ARGS+=("--processes" "$PROCESSES")
-    log_info "Running tests in parallel with $PROCESSES processes"
+    # Validate processes is a positive integer > 1
+    if [[ "$PROCESSES" =~ ^[0-9]+$ ]] && [ "$PROCESSES" -gt 1 ]; then
+        USE_PABOT=true
+        log_info "Running tests in parallel with $PROCESSES processes (using pabot)"
+    else
+        log_warning "Invalid processes value '$PROCESSES', falling back to sequential execution"
+    fi
 fi
 
 # 添加超時
@@ -193,9 +199,16 @@ for arg in "${ROBOT_ARGS[@]}"; do
     fi
 done
 
-# 執行 robot 命令
-log_info "Executing: robot ${SAFE_LOG_ARGS[*]}"
-robot "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
+# Execute robot or pabot based on processes setting
+if [ "$USE_PABOT" = true ]; then
+    # Build pabot arguments: --processes goes before robot args
+    PABOT_ARGS=("--processes" "$PROCESSES")
+    log_info "Executing: pabot ${PABOT_ARGS[*]} ${SAFE_LOG_ARGS[*]}"
+    pabot "${PABOT_ARGS[@]}" "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
+else
+    log_info "Executing: robot ${SAFE_LOG_ARGS[*]}"
+    robot "${ROBOT_ARGS[@]}" || EXIT_CODE=$?
+fi
 
 # SECURITY: Scrub sensitive values from generated artifacts using Python scrubber
 # Robot Framework logs variable values in output.xml, log.html, and report.html.
