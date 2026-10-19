@@ -3,13 +3,13 @@
 Security scrubber for Robot Framework artifacts.
 
 Reads sensitive values from environment variables and replaces them
-(including XML/HTML escaped variants) in artifact files with [SCRUBBED].
+(including XML/HTML/JS escaped variants) in artifact files with [SCRUBBED].
 
 Design principles:
 - Values are read from env vars only, never printed or logged
 - Uses literal string replacement (no regex, no delimiters)
-- Handles special chars: / $ | @ & < > etc.
-- Single value failure is caught, processing continues
+- Handles special chars: / $ | @ & < > " ' etc.
+- Per-value try/except: single value failure skips only that value
 - Always exits 0 to preserve Robot's original exit code
 """
 
@@ -21,79 +21,131 @@ from pathlib import Path
 
 def get_escaped_variants(value: str) -> list[str]:
     """
-    Generate common escaped variants of a value.
+    Generate all common escaped variants of a value.
     Returns list of variants to search for, including the original.
+    
+    Covers:
+    - Raw value
+    - html.escape(quote=True): & < > " ' all escaped
+    - html.escape(quote=False): & < > escaped, quotes remain
+    - JS escaped: backslash-quote, backslash-slash for log.html JavaScript strings
+    - Various HTML entity forms for quotes
     """
-    variants = [value]
+    variants = set()
+    variants.add(value)
     
     if not value:
-        return variants
+        return list(variants)
     
-    # XML/HTML entity escaping
-    xml_escaped = html.escape(value, quote=True)
-    if xml_escaped != value:
-        variants.append(xml_escaped)
+    # html.escape with quote=True (escapes & < > " ')
+    try:
+        escaped_quote_true = html.escape(value, quote=True)
+        variants.add(escaped_quote_true)
+    except Exception:
+        pass
     
-    # Additional HTML numeric escapes for quotes
-    # ' can be &#x27; or &#39; or &apos;
-    html_escaped = value.replace("&", "&amp;")
-    html_escaped = html_escaped.replace("<", "&lt;")
-    html_escaped = html_escaped.replace(">", "&gt;")
-    html_escaped = html_escaped.replace('"', "&quot;")
-    html_escaped = html_escaped.replace("'", "&#x27;")
-    if html_escaped not in variants:
-        variants.append(html_escaped)
+    # html.escape with quote=False (escapes & < > only, quotes remain)
+    try:
+        escaped_quote_false = html.escape(value, quote=False)
+        variants.add(escaped_quote_false)
+    except Exception:
+        pass
     
-    # Variant with &#39; for single quote
-    html_escaped_alt = value.replace("&", "&amp;")
-    html_escaped_alt = html_escaped_alt.replace("<", "&lt;")
-    html_escaped_alt = html_escaped_alt.replace(">", "&gt;")
-    html_escaped_alt = html_escaped_alt.replace('"', "&quot;")
-    html_escaped_alt = html_escaped_alt.replace("'", "&#39;")
-    if html_escaped_alt not in variants:
-        variants.append(html_escaped_alt)
+    # Manual HTML entity escaping with different quote forms
+    try:
+        # &quot; for double quote, &#x27; for single quote
+        manual_escaped = value.replace("&", "&amp;")
+        manual_escaped = manual_escaped.replace("<", "&lt;")
+        manual_escaped = manual_escaped.replace(">", "&gt;")
+        manual_escaped = manual_escaped.replace('"', "&quot;")
+        manual_escaped = manual_escaped.replace("'", "&#x27;")
+        variants.add(manual_escaped)
+    except Exception:
+        pass
     
-    # Variant with &apos; for single quote (XML)
-    xml_apos = value.replace("&", "&amp;")
-    xml_apos = xml_apos.replace("<", "&lt;")
-    xml_apos = xml_apos.replace(">", "&gt;")
-    xml_apos = xml_apos.replace('"', "&quot;")
-    xml_apos = xml_apos.replace("'", "&apos;")
-    if xml_apos not in variants:
-        variants.append(xml_apos)
+    try:
+        # &#39; for single quote variant
+        manual_escaped_39 = value.replace("&", "&amp;")
+        manual_escaped_39 = manual_escaped_39.replace("<", "&lt;")
+        manual_escaped_39 = manual_escaped_39.replace(">", "&gt;")
+        manual_escaped_39 = manual_escaped_39.replace('"', "&quot;")
+        manual_escaped_39 = manual_escaped_39.replace("'", "&#39;")
+        variants.add(manual_escaped_39)
+    except Exception:
+        pass
     
-    return variants
+    try:
+        # &apos; for single quote (XML style)
+        manual_escaped_apos = value.replace("&", "&amp;")
+        manual_escaped_apos = manual_escaped_apos.replace("<", "&lt;")
+        manual_escaped_apos = manual_escaped_apos.replace(">", "&gt;")
+        manual_escaped_apos = manual_escaped_apos.replace('"', "&quot;")
+        manual_escaped_apos = manual_escaped_apos.replace("'", "&apos;")
+        variants.add(manual_escaped_apos)
+    except Exception:
+        pass
+    
+    # JavaScript string escaping (for log.html embedded JS)
+    try:
+        js_escaped = value.replace("\\", "\\\\")
+        js_escaped = js_escaped.replace('"', '\\"')
+        js_escaped = js_escaped.replace("'", "\\'")
+        js_escaped = js_escaped.replace("/", "\\/")
+        variants.add(js_escaped)
+    except Exception:
+        pass
+    
+    # JS escaped combined with HTML escaping (log.html has JS with HTML-escaped content)
+    try:
+        js_html = html.escape(value, quote=False)
+        js_html = js_html.replace("\\", "\\\\")
+        js_html = js_html.replace('"', '\\"')
+        js_html = js_html.replace("'", "\\'")
+        js_html = js_html.replace("/", "\\/")
+        variants.add(js_html)
+    except Exception:
+        pass
+    
+    return list(variants)
 
 
 def scrub_file(filepath: Path, values_to_scrub: list[str]) -> int:
     """
     Scrub all sensitive values from a single file.
     Returns count of replacements made.
+    Each value is processed in its own try/except to continue on single value failure.
     """
     replacements = 0
     
     try:
         content = filepath.read_text(encoding='utf-8', errors='replace')
-        original_content = content
-        
-        for value in values_to_scrub:
+    except Exception:
+        return 0
+    
+    original_content = content
+    
+    for value in values_to_scrub:
+        # Per-value try/except: single value failure skips only that value
+        try:
             if not value or len(value) < 4:
                 continue
             
-            # Get all escaped variants
+            # Get all escaped variants for this value
             variants = get_escaped_variants(value)
             
             for variant in variants:
-                if variant in content:
+                if variant and variant in content:
                     content = content.replace(variant, "[SCRUBBED]")
                     replacements += 1
-        
-        if content != original_content:
+        except Exception:
+            # Single value processing failed, continue with next value
+            continue
+    
+    if content != original_content:
+        try:
             filepath.write_text(content, encoding='utf-8')
-            
-    except Exception:
-        # Silently continue on any error for this file
-        pass
+        except Exception:
+            pass
     
     return replacements
 
@@ -104,7 +156,6 @@ def main():
     Reads report directory and scrub values from environment variables.
     """
     if len(sys.argv) < 2:
-        # No report directory specified, exit silently
         sys.exit(0)
     
     report_dir = Path(sys.argv[1])
@@ -112,16 +163,9 @@ def main():
         sys.exit(0)
     
     # Collect values to scrub from environment variables
-    # SCRUB_VALUES is a newline-separated list passed via env
-    # We also check for TARGET_URL directly
     values_to_scrub = []
     
-    # Read from SCRUB_VALUES_FILE if exists (contains base64 or raw values)
-    scrub_env = os.environ.get("_SCRUB_VALUES", "")
-    if scrub_env:
-        values_to_scrub.extend(v for v in scrub_env.split("\x00") if v)
-    
-    # Also get TARGET_URL directly
+    # Get TARGET_URL directly
     target_url = os.environ.get("_SCRUB_TARGET_URL", "")
     if target_url and target_url not in values_to_scrub:
         values_to_scrub.append(target_url)
@@ -143,14 +187,12 @@ def main():
                 count = scrub_file(filepath, values_to_scrub)
                 total_replacements += count
             except Exception:
-                # Continue on any error
                 continue
     
-    # Print only the count, never the values
     if total_replacements > 0:
         print(f"[SCRUBBER] Processed {total_replacements} replacement(s)")
     
-    # Always exit 0 to not affect Robot's exit code
+    # Always exit 0 to preserve Robot's exit code
     sys.exit(0)
 
 
